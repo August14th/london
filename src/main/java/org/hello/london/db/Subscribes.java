@@ -36,6 +36,28 @@ public class Subscribes {
         }
     }
 
+    public List<OfflineMessagesMeta> getOfflineMessageMetas(String userId) throws Exception {
+        Connection conn = postgres.getConnection();
+        List<OfflineMessagesMeta> metas = new ArrayList<>();
+        try {
+            PreparedStatement select = conn.prepareStatement("SELECT sub.topicid, sub.lastackid, t.lastmsgid FROM subscribes sub JOIN topics t " +
+                    "ON sub.topicid = t.id WHERE sub.userid = ? AND sub.lastackid != t.lastmsgid");
+            try {
+                select.setString(1, userId);
+                ResultSet rs = select.executeQuery();
+                while (rs.next()) {
+                    metas.add(new OfflineMessagesMeta(rs.getString(1), rs.getLong(2), rs.getLong(3)));
+                }
+                rs.close();
+                return metas;
+            } finally {
+                select.close();
+            }
+        } finally {
+            conn.close();
+        }
+    }
+
     public void updateLastAckId(String userId, String topic, long lastAckId) throws Exception {
         Connection conn = postgres.getConnection();
         try {

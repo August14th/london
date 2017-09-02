@@ -1,12 +1,12 @@
 package org.hello.london.core;
 
-public class Notify {
+public class Message {
 
-    public Notify(){
+    public Message(){
 
     }
 
-    public Notify(String topic, long msgId, byte[] payload) {
+    public Message(String topic, long msgId, byte[] payload) {
         this.topic = topic;
         this.payload = payload;
         this.msgId = msgId;

@@ -20,7 +20,7 @@ public class Dispatcher implements Runnable {
     public Dispatcher(Connection conn) throws Exception {
         postgres = (PGConnection) conn;
         Statement stmt = conn.createStatement();
-        stmt.execute("LISTEN mqtt");
+        stmt.execute("LISTEN london");
         stmt.close();
     }
 
@@ -31,11 +31,11 @@ public class Dispatcher implements Runnable {
                 if (notices != null) {
                     for (PGNotification notice : notices) {
                         ObjectMapper mapper = new ObjectMapper();
-                        Notify notify = mapper.readValue(notice.getParameter(), Notify.class);
-                        Set<MqttHandler> set = handlers.get(notify.topic);
+                        Message msg = mapper.readValue(notice.getParameter(), Message.class);
+                        Set<MqttHandler> set = handlers.get(msg.topic);
                         if (set != null) {
                             for (MqttHandler handler : set) {
-                                handler.notify(notify);
+                                handler.send(msg);
                             }
                         }
                     }
@@ -69,7 +69,9 @@ public class Dispatcher implements Runnable {
         if (topics == null) return;
         for (String topic : topics) {
             Set<MqttHandler> set = handlers.get(topic);
-            set.remove(handler);
+            if(set != null){
+                set.remove(handler);
+            }
         }
     }
 }

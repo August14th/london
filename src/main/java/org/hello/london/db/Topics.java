@@ -1,7 +1,7 @@
 package org.hello.london.db;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.hello.london.core.Notify;
+import org.hello.london.core.Message;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -17,7 +17,7 @@ public class Topics {
         this.postgres = postgres;
     }
 
-    public long publish(String topic, byte[] payload) throws Exception {
+    public Message publish(String topic, byte[] payload) throws Exception {
         Connection conn = postgres.getConnection();
         long lastMsgId = -1;
         conn.setAutoCommit(false);
@@ -52,16 +52,16 @@ public class Topics {
             // notify through postgres' channel
             PreparedStatement notify = conn.prepareStatement("SELECT pg_notify(?, ?)");
             try {
-                notify.setString(1, "mqtt");
-                Notify notice = new Notify(topic, lastMsgId, payload);
+                notify.setString(1, "london");
+                Message notice = new Message(topic, lastMsgId, payload);
                 ObjectMapper mapper = new ObjectMapper();
                 notify.setString(2, mapper.writeValueAsString(notice));
                 notify.executeQuery().close();
+                conn.commit();
+                return notice;
             } finally {
                 notify.close();
             }
-            conn.commit();
-            return lastMsgId;
         } catch (Exception e) {
             conn.rollback();
             throw new RuntimeException("Publish failed.", e);

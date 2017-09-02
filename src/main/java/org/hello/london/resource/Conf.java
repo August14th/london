@@ -6,4 +6,6 @@ public class Conf {
     public int port;
 
     public int maxIdleTime;
+
+    public Mongo mongo;
 }

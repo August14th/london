@@ -1,5 +1,6 @@
 package org.hello.london.core;
 
+import com.mongodb.MongoClient;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -7,14 +8,17 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.handler.timeout.IdleStateEvent;
-import org.hello.london.db.States;
+import org.hello.london.db.Messages;
+import org.hello.london.db.OfflineMessagesMeta;
 import org.hello.london.db.Subscribes;
 import org.hello.london.db.Topics;
 
 import javax.sql.DataSource;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
@@ -26,21 +30,26 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private Topics topicTable;
 
-    private States stateTable;
-
     private Subscribes subTable;
+
+    private Messages msgTable;
 
     private Dispatcher dispatcher;
 
+    private OnlineState state;
+
     private Queue<ToAck> toAcks = new LinkedBlockingQueue<>();
 
-    private AtomicBoolean closed = new AtomicBoolean(false);
+    private volatile boolean ready = false;
 
-    MqttHandler(DataSource postgres, Dispatcher dispatcher) {
+    private Queue<Message> buffer = new LinkedBlockingQueue<>();
+
+    public MqttHandler(DataSource postgres, Dispatcher dispatcher, MongoClient mongo, OnlineState state) {
         this.dispatcher = dispatcher;
+        msgTable = new Messages(mongo);
         topicTable = new Topics(postgres);
-        stateTable = new States(postgres);
         subTable = new Subscribes(postgres);
+        this.state = state;
     }
 
     @Override
@@ -81,11 +90,12 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     private MqttConnAckMessage onConnect(MqttConnectMessage msg) throws Exception {
-        this.userid = msg.payload().userName();
+        userid = msg.payload().userName();
         String password = msg.payload().password();
         this.topics.addAll(subTable.get(userid));
+        this.sendOfflineMessages();
         this.dispatcher.register(topics, this);
-        stateTable.enter(this.userid, Calendar.getInstance());
+        state.enter(userid);
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.CONNACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttConnAckVariableHeader variable = new MqttConnAckVariableHeader(MqttConnectReturnCode.CONNECTION_ACCEPTED, false);
         System.out.println(this.userid + " Connected");
@@ -131,7 +141,12 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         ByteBuf byteBuf = publish.payload();
         byte[] payload = new byte[byteBuf.readableBytes()];
         byteBuf.getBytes(byteBuf.readerIndex(), payload, 0, byteBuf.readableBytes());
-        topicTable.publish(topic, payload);
+        Message msg = topicTable.publish(topic, payload);
+        try {
+            msgTable.append(msg);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttMessageIdVariableHeader variable = MqttMessageIdVariableHeader.from(publish.variableHeader().messageId());
         return new MqttPubAckMessage(fixed, variable);
@@ -152,29 +167,51 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         return new MqttMessage(fixed);
     }
 
+    private void sendOfflineMessages() throws Exception {
+        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(this.userid);
+        for (OfflineMessagesMeta meta : metas) {
+            List<Message> messages = msgTable.get(meta);
+            for (Message msg : messages) {
+                this.directSend(msg);
+            }
+        }
+        while (!buffer.isEmpty()) {
+            Message msg = buffer.poll();
+            this.directSend(msg);
+        }
+        ready = true;
+    }
+
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         cause.printStackTrace();
         ctx.channel().close();
     }
 
-    void notify(Notify notify) {
-        MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBLISH, false, MqttQoS.AT_LEAST_ONCE, false, 2 + notify.topic.length() + 2 + notify.payload.length);
-        MqttPublishVariableHeader variable = new MqttPublishVariableHeader(notify.topic, (int) notify.msgId);
-        MqttPublishMessage publish = new MqttPublishMessage(fixed, variable, Unpooled.wrappedBuffer(notify.payload));
-        this.toAcks.add(new ToAck((int) notify.msgId, notify.topic, Calendar.getInstance().getTime()));
+    void send(Message msg) {
+        if (ready) {
+            this.directSend(msg);
+        } else {
+            buffer.add(msg);
+        }
+    }
+
+    private void directSend(Message msg) {
+        MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBLISH, false, MqttQoS.AT_LEAST_ONCE, false, 2 + msg.topic.length() + 2 + msg.payload.length);
+        MqttPublishVariableHeader variable = new MqttPublishVariableHeader(msg.topic, (int) msg.msgId);
+        MqttPublishMessage publish = new MqttPublishMessage(fixed, variable, Unpooled.wrappedBuffer(msg.payload));
+        this.toAcks.add(new ToAck((int) msg.msgId, msg.topic, Calendar.getInstance().getTime()));
         this.channel.writeAndFlush(publish);
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        if (!closed.compareAndSet(false, true)) return;
         if (this.userid != null) {
-            this.stateTable.exit(this.userid, Calendar.getInstance());
             if (this.topics != null) {
                 this.dispatcher.deregister(this.topics, this);
             }
             System.out.println(this.userid + " disconnected");
         }
+        state.exit(userid);
     }
 
     @Override

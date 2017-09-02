@@ -19,11 +19,13 @@ import java.util.concurrent.Executors;
 public class MqttServer {
 
     public static void main(String[] args) throws Exception {
-        final Resources resources = new Resources();
+        Resources resources = new Resources();
         C3P0NativeJdbcExtractor cp30NativeJdbcExtractor = new C3P0NativeJdbcExtractor();
-        final Dispatcher dispatcher = new Dispatcher(cp30NativeJdbcExtractor.getNativeConnection(resources.postgres.getConnection()));
+        Dispatcher dispatcher = new Dispatcher(cp30NativeJdbcExtractor.getNativeConnection(resources.postgres.getConnection()));
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(dispatcher);
+
+        OnlineState state = new OnlineState();
 
         ServerBootstrap bootstrap = new ServerBootstrap();
         EventLoopGroup worker = new NioEventLoopGroup();
@@ -36,7 +38,7 @@ public class MqttServer {
                             ch.pipeline().addLast(new MqttDecoder());
                             ch.pipeline().addLast(MqttEncoder.INSTANCE);
                             ch.pipeline().addLast(new IdleStateHandler(resources.maxIdleTime, 0, 0));
-                            ch.pipeline().addLast(new MqttHandler(resources.postgres, dispatcher));
+                            ch.pipeline().addLast(new MqttHandler(resources.postgres, dispatcher, resources.mongo, state));
                         }
                     });
             ChannelFuture future = bootstrap.bind(resources.port).sync();

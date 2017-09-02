@@ -1,13 +1,15 @@
 package org.hello.london.resource;
 
 import javax.sql.DataSource;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 
 import com.mchange.v2.c3p0.ComboPooledDataSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mongodb.MongoClient;
 
-public class Resources {
+public class Resources implements Closeable {
 
     public DataSource postgres;
 
@@ -15,9 +17,12 @@ public class Resources {
 
     public int maxIdleTime;
 
+    public MongoClient mongo;
+
     public Resources() throws Exception {
         Conf conf = readConf();
         postgres = getDataSource(conf.postgres.c3p0);
+        mongo = getMongoClient(conf.mongo);
         port = conf.port;
         maxIdleTime = conf.maxIdleTime;
     }
@@ -36,6 +41,11 @@ public class Resources {
         }
     }
 
+    private MongoClient getMongoClient(Mongo mongo) {
+        MongoClient client = new MongoClient(mongo.ip, mongo.port);
+        return client;
+    }
+
     private DataSource getDataSource(C3P0 c3p0) throws Exception {
         ComboPooledDataSource ds = new ComboPooledDataSource(true);
         ds.setDataSourceName("C3PO");
@@ -48,6 +58,11 @@ public class Resources {
         ds.setMinPoolSize(c3p0.minPoolSize);
 
         return ds;
+    }
+
+    @Override
+    public void close() throws IOException {
+        this.mongo.close();
     }
 }
 
