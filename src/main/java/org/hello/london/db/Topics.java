@@ -13,8 +13,11 @@ public class Topics {
 
     private DataSource postgres;
 
-    public Topics(DataSource postgres) {
+    private Messages msgTable;
+
+    public Topics(DataSource postgres, Messages msgTable) {
         this.postgres = postgres;
+        this.msgTable = msgTable;
     }
 
     public Message publish(String topic, byte[] payload) throws Exception {
@@ -49,16 +52,21 @@ public class Topics {
                 }
                 lastMsgId = 1;
             }
+            Message msg = new Message(topic, lastMsgId, payload);
+            try {
+                this.msgTable.append(msg);
+            }catch (Exception e){
+                e.printStackTrace();
+            }
             // notify through postgres' channel
             PreparedStatement notify = conn.prepareStatement("SELECT pg_notify(?, ?)");
             try {
                 notify.setString(1, "london");
-                Message notice = new Message(topic, lastMsgId, payload);
                 ObjectMapper mapper = new ObjectMapper();
-                notify.setString(2, mapper.writeValueAsString(notice));
+                notify.setString(2, mapper.writeValueAsString(msg));
                 notify.executeQuery().close();
                 conn.commit();
-                return notice;
+                return msg;
             } finally {
                 notify.close();
             }

@@ -47,7 +47,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     public MqttHandler(DataSource postgres, Dispatcher dispatcher, MongoClient mongo, OnlineState state) {
         this.dispatcher = dispatcher;
         msgTable = new Messages(mongo);
-        topicTable = new Topics(postgres);
+        topicTable = new Topics(postgres, msgTable);
         subTable = new Subscribes(postgres);
         this.state = state;
     }
@@ -92,10 +92,10 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     private MqttConnAckMessage onConnect(MqttConnectMessage msg) throws Exception {
         userid = msg.payload().userName();
         String password = msg.payload().password();
-        this.topics.addAll(subTable.get(userid));
-        this.sendOfflineMessages();
-        this.dispatcher.register(topics, this);
         state.enter(userid);
+        this.topics.addAll(subTable.get(userid));
+        this.dispatcher.register(topics, this);
+        this.sendOfflineMessages();
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.CONNACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttConnAckVariableHeader variable = new MqttConnAckVariableHeader(MqttConnectReturnCode.CONNECTION_ACCEPTED, false);
         System.out.println(this.userid + " Connected");
@@ -141,12 +141,8 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         ByteBuf byteBuf = publish.payload();
         byte[] payload = new byte[byteBuf.readableBytes()];
         byteBuf.getBytes(byteBuf.readerIndex(), payload, 0, byteBuf.readableBytes());
-        Message msg = topicTable.publish(topic, payload);
-        try {
-            msgTable.append(msg);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        topicTable.publish(topic, payload);
+
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttMessageIdVariableHeader variable = MqttMessageIdVariableHeader.from(publish.variableHeader().messageId());
         return new MqttPubAckMessage(fixed, variable);
@@ -168,18 +164,25 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     private void sendOfflineMessages() throws Exception {
-        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(this.userid);
-        for (OfflineMessagesMeta meta : metas) {
-            List<Message> messages = msgTable.get(meta);
-            for (Message msg : messages) {
-                this.directSend(msg);
+        new Thread(() -> {
+            try {
+                List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
+                for (OfflineMessagesMeta meta : metas) {
+                    List<Message> messages = msgTable.get(meta);
+                    for (Message msg : messages) {
+                        directSend(msg);
+                    }
+                }
+                while (!buffer.isEmpty()) {
+                    Message msg = buffer.poll();
+                    directSend(msg);
+                }
+                ready = true;
+            } catch (Exception e) {
+                e.printStackTrace();
+                channel.close();
             }
-        }
-        while (!buffer.isEmpty()) {
-            Message msg = buffer.poll();
-            this.directSend(msg);
-        }
-        ready = true;
+        }).start();
     }
 
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {

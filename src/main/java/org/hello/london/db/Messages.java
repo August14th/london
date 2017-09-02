@@ -5,6 +5,7 @@ import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Sorts;
+import com.mongodb.client.model.UpdateOptions;
 import org.bson.Document;
 import org.bson.types.Binary;
 import org.hello.london.core.Message;
@@ -22,8 +23,8 @@ public class Messages {
     }
 
     public void append(Message msg) {
-        Document notice = new Document("topic", msg.topic).append("msgid", msg.msgId).append("msg", new Binary(msg.payload));
-        mongo.insertOne(notice);
+        Document index = new Document("topic", msg.topic).append("msgid", msg.msgId);
+        mongo.updateOne(index, new Document("$set", new Document("msg", new Binary(msg.payload))), new UpdateOptions().upsert(true));
     }
 
     public List<Message> get(OfflineMessagesMeta meta) {
