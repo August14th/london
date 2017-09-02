@@ -52,6 +52,7 @@ public class Topics {
                 }
                 lastMsgId = 1;
             }
+            //persist to mongo
             Message msg = new Message(topic, lastMsgId, payload);
             try {
                 this.msgTable.append(msg);

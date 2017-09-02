@@ -166,11 +166,14 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     private void sendOfflineMessages() throws Exception {
         new Thread(() -> {
             try {
+                // 离线消息
                 List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
-                for (OfflineMessagesMeta meta : metas) {
-                    List<Message> messages = msgTable.get(meta);
-                    for (Message msg : messages) {
-                        directSend(msg);
+                if (!metas.isEmpty()) {
+                    for (OfflineMessagesMeta meta : metas) {
+                        List<Message> messages = msgTable.get(meta);
+                        for (Message msg : messages) {
+                            directSend(msg);
+                        }
                     }
                 }
                 while (!buffer.isEmpty()) {
