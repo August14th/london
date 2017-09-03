@@ -14,10 +14,7 @@ import org.hello.london.db.Subscribes;
 import org.hello.london.db.Topics;
 
 import javax.sql.DataSource;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.List;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
@@ -40,16 +37,14 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private Queue<ToAck> toAcks = new LinkedBlockingQueue<>();
 
-    private volatile boolean ready = false;
-
-    private Queue<Message> buffer = new LinkedBlockingQueue<>();
+    private LinkedBlockingQueue<Message> buffer = new LinkedBlockingQueue<>();
 
     public MqttHandler(DataSource postgres, Dispatcher dispatcher, MongoClient mongo, OnlineState state) {
         this.dispatcher = dispatcher;
+        this.state = state;
         msgTable = new Messages(mongo);
         topicTable = new Topics(postgres, msgTable);
         subTable = new Subscribes(postgres);
-        this.state = state;
     }
 
     @Override
@@ -79,13 +74,13 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
                 ack = onPingReq();
                 break;
             case DISCONNECT:
-                ctx.channel().close();
+                onDisconnect();
                 break;
             default:
                 throw new RuntimeException("UnSupported message type: " + msg.fixedHeader().messageType());
         }
         if (ack != null) {
-            ctx.channel().writeAndFlush(ack);
+            this.channel.writeAndFlush(ack);
         }
     }
 
@@ -95,11 +90,16 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         state.enter(userid);
         this.topics.addAll(subTable.get(userid));
         this.dispatcher.register(topics, this);
-        this.sendOfflineMessages();
+        this.sendingLoop();
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.CONNACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttConnAckVariableHeader variable = new MqttConnAckVariableHeader(MqttConnectReturnCode.CONNECTION_ACCEPTED, false);
         System.out.println(this.userid + " Connected");
         return new MqttConnAckMessage(fixed, variable);
+    }
+
+    private void onDisconnect() {
+        System.out.println("Receive disconnect message from " + this.userid);
+        channel.close();
     }
 
     private MqttSubAckMessage onSubscribe(MqttSubscribeMessage sub) throws Exception {
@@ -151,10 +151,10 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     private void onPubAck(MqttPubAckMessage ack) throws Exception {
         int ackId = ack.variableHeader().messageId();
         ToAck next = this.toAcks.poll();
-        if (ackId == next.msgid) {
+        if (next != null && ackId == next.msgid) {
             this.subTable.updateLastAckId(this.userid, next.topic, ackId);
         } else {
-            throw new RuntimeException("Out of order. Expected: " + next + ", but: " + ackId);
+            throw new RuntimeException("Out of order. Expected: " + (next == null ? null : next.msgid) + ", but: " + ackId);
         }
     }
 
@@ -163,42 +163,54 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         return new MqttMessage(fixed);
     }
 
-    private void sendOfflineMessages() throws Exception {
+    private void sendingLoop() {
         new Thread(() -> {
             try {
-                // 离线消息
-                List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
-                if (!metas.isEmpty()) {
-                    for (OfflineMessagesMeta meta : metas) {
-                        List<Message> messages = msgTable.get(meta);
-                        for (Message msg : messages) {
-                            directSend(msg);
+                Map<String, Long> hasSent = sendOfflineMessages();
+                while (true) {
+                    Message msg = buffer.take();
+                    if (hasSent != null) {
+                        Long last = hasSent.get(msg.topic);
+                        if (last != null && msg.msgId <= last) {
+                            continue;
+                        } else {
+                            hasSent = null;
                         }
                     }
-                }
-                while (!buffer.isEmpty()) {
-                    Message msg = buffer.poll();
                     directSend(msg);
                 }
-                ready = true;
             } catch (Exception e) {
                 e.printStackTrace();
                 channel.close();
             }
-        }).start();
+        }, "Sending-loop").start();
+    }
+
+    private Map<String, Long> sendOfflineMessages() throws Exception {
+        // offline messages
+        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
+        if (!metas.isEmpty()) {
+            Map<String, Long> hasSent = new HashMap<>();
+            for (OfflineMessagesMeta meta : metas) {
+                List<Message> messages = msgTable.get(meta);
+                for (Message msg : messages) {
+                    directSend(msg);
+                }
+                hasSent.put(meta.topic, meta.end);
+            }
+            return hasSent;
+        } else {
+            return null;
+        }
     }
 
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         cause.printStackTrace();
-        ctx.channel().close();
+        this.channel.close();
     }
 
     void send(Message msg) {
-        if (ready) {
-            this.directSend(msg);
-        } else {
-            buffer.add(msg);
-        }
+        buffer.add(msg);
     }
 
     private void directSend(Message msg) {
@@ -215,9 +227,9 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
             if (this.topics != null) {
                 this.dispatcher.deregister(this.topics, this);
             }
+            state.exit(userid);
             System.out.println(this.userid + " disconnected");
         }
-        state.exit(userid);
     }
 
     @Override
@@ -226,7 +238,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         super.userEventTriggered(ctx, evt);
         if (evt instanceof IdleStateEvent) {
             {
-                ctx.channel().close();
+                this.channel.close();
             }
         }
     }

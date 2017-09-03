@@ -56,7 +56,7 @@ public class Topics {
             Message msg = new Message(topic, lastMsgId, payload);
             try {
                 this.msgTable.append(msg);
-            }catch (Exception e){
+            } catch (Exception e) {
                 e.printStackTrace();
             }
             // notify through postgres' channel
@@ -78,5 +78,4 @@ public class Topics {
             conn.close();
         }
     }
-
 }

@@ -32,10 +32,12 @@ public class Dispatcher implements Runnable {
                     for (PGNotification notice : notices) {
                         ObjectMapper mapper = new ObjectMapper();
                         Message msg = mapper.readValue(notice.getParameter(), Message.class);
-                        Set<MqttHandler> set = handlers.get(msg.topic);
-                        if (set != null) {
-                            for (MqttHandler handler : set) {
-                                handler.send(msg);
+                        synchronized (this) {
+                            Set<MqttHandler> set = handlers.get(msg.topic);
+                            if (set != null) {
+                                for (MqttHandler handler : set) {
+                                    handler.send(msg);
+                                }
                             }
                         }
                     }
