@@ -163,13 +163,14 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         return new MqttMessage(fixed);
     }
 
-    private void sendOfflineMessages() throws Exception {
+    private void sendOfflineMessages() {
         new Thread(() -> {
             try {
                 Map<String, Long> hasSent = sendOfflineMessages0();
                 drainBuffer(hasSent);
             } catch (Exception e) {
                 e.printStackTrace();
+                channel.close();
             }
         }).start();
     }
