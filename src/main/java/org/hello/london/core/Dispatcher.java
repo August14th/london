@@ -13,7 +13,7 @@ import java.util.Set;
 
 public class Dispatcher implements Runnable {
 
-    private HashMap<String, Set<MqttHandler>> handlers = new HashMap<String, Set<MqttHandler>>();
+    private HashMap<String, Set<MqttHandler>> handlers = new HashMap<>();
 
     private PGConnection postgres;
 

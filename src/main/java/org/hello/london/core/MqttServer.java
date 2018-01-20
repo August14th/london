@@ -20,8 +20,8 @@ public class MqttServer {
 
     public static void main(String[] args) throws Exception {
         Resources resources = new Resources();
-        C3P0NativeJdbcExtractor cp30NativeJdbcExtractor = new C3P0NativeJdbcExtractor();
-        Dispatcher dispatcher = new Dispatcher(cp30NativeJdbcExtractor.getNativeConnection(resources.postgres.getConnection()));
+        C3P0NativeJdbcExtractor c3p0NativeJdbcExtractor = new C3P0NativeJdbcExtractor();
+        Dispatcher dispatcher = new Dispatcher(c3p0NativeJdbcExtractor.getNativeConnection(resources.postgres.getConnection()));
         ExecutorService executor = Executors.newSingleThreadExecutor();
         executor.execute(dispatcher);
 

@@ -57,6 +57,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         switch (msg.fixedHeader().messageType()) {
             case CONNECT:
                 ack = onConnect((MqttConnectMessage) msg);
+                this.sendOfflineMessages();
                 break;
             case PUBLISH:
                 ack = onPublish((MqttPublishMessage) msg);
@@ -90,7 +91,6 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         state.enter(userid);
         this.topics.addAll(subTable.get(userid));
         this.dispatcher.register(topics, this);
-        this.sendingLoop();
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.CONNACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttConnAckVariableHeader variable = new MqttConnAckVariableHeader(MqttConnectReturnCode.CONNECTION_ACCEPTED, false);
         System.out.println(this.userid + " Connected");
@@ -163,30 +163,41 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         return new MqttMessage(fixed);
     }
 
-    private void sendingLoop() {
+    private void sendOfflineMessages() {
         new Thread(() -> {
             try {
-                Map<String, Long> hasSent = sendOfflineMessages();
-                while (true) {
-                    Message msg = buffer.take();
-                    if (hasSent != null) {
-                        Long last = hasSent.get(msg.topic);
-                        if (last != null && msg.msgId <= last) {
-                            continue;
-                        } else {
-                            hasSent = null;
-                        }
-                    }
-                    directSend(msg);
-                }
+                Map<String, Long> hasSent = sendOfflineMessages0();
+                drainBuffer(hasSent);
             } catch (Exception e) {
                 e.printStackTrace();
                 channel.close();
             }
-        }, "Sending-loop").start();
+        }).start();
     }
 
-    private Map<String, Long> sendOfflineMessages() throws Exception {
+    private void drainBuffer(Map<String, Long> hasSent) {
+        drainBuffer0(hasSent);
+        synchronized (this) {
+            drainBuffer0(hasSent);
+            buffer = null;
+        }
+    }
+
+    private void drainBuffer0(Map<String, Long> hasSent) {
+        while (!buffer.isEmpty()) {
+            Message msg = buffer.poll();
+            if (hasSent == null) {
+                directSend(msg);
+            } else {
+                Long last = hasSent.get(msg.topic);
+                if (last == null || msg.msgId > last) {
+                    directSend(msg);
+                }
+            }
+        }
+    }
+
+    private Map<String, Long> sendOfflineMessages0() throws Exception {
         // offline messages
         List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
         if (!metas.isEmpty()) {
@@ -210,7 +221,13 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     void send(Message msg) {
-        buffer.add(msg);
+        synchronized (this) {
+            if (buffer != null) {
+                buffer.add(msg);
+            } else {
+                directSend(msg);
+            }
+        }
     }
 
     private void directSend(Message msg) {
