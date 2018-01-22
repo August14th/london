@@ -1,13 +1,13 @@
 package org.hello.london.resource;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mchange.v2.c3p0.ComboPooledDataSource;
+import com.mongodb.MongoClient;
+
 import javax.sql.DataSource;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
-
-import com.mchange.v2.c3p0.ComboPooledDataSource;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mongodb.MongoClient;
 
 public class Resources implements Closeable {
 

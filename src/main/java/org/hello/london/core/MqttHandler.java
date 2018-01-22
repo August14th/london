@@ -1,6 +1,5 @@
 package org.hello.london.core;
 
-import com.mongodb.MongoClient;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.Channel;
@@ -12,14 +11,18 @@ import org.hello.london.db.Messages;
 import org.hello.london.db.OfflineMessagesMeta;
 import org.hello.london.db.Subscribes;
 import org.hello.london.db.Topics;
+import org.hello.london.resource.Resources;
 
-import javax.sql.DataSource;
 import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 
 public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
-    private String userid;
+    private static ExecutorService executor = Executors.newCachedThreadPool();
+
+    private String userId;
 
     private Channel channel;
 
@@ -39,12 +42,12 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private LinkedBlockingQueue<Message> buffer = new LinkedBlockingQueue<>();
 
-    public MqttHandler(DataSource postgres, Dispatcher dispatcher, MongoClient mongo, OnlineState state) {
+    public MqttHandler(Resources resources, Dispatcher dispatcher, OnlineState state) {
         this.dispatcher = dispatcher;
         this.state = state;
-        msgTable = new Messages(mongo);
-        topicTable = new Topics(postgres, msgTable);
-        subTable = new Subscribes(postgres);
+        msgTable = new Messages(resources.mongo);
+        topicTable = new Topics(resources.postgres, msgTable);
+        subTable = new Subscribes(resources.postgres);
     }
 
     @Override
@@ -53,56 +56,61 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     protected void channelRead0(ChannelHandlerContext ctx, MqttMessage msg) throws Exception {
-        MqttMessage ack = null;
-        switch (msg.fixedHeader().messageType()) {
-            case CONNECT:
-                ack = onConnect((MqttConnectMessage) msg);
-                this.sendOfflineMessages();
-                break;
-            case PUBLISH:
-                ack = onPublish((MqttPublishMessage) msg);
-                break;
-            case SUBSCRIBE:
-                ack = onSubscribe((MqttSubscribeMessage) msg);
-                break;
-            case UNSUBSCRIBE:
-                ack = onUnSubscribe((MqttUnsubscribeMessage) msg);
-                break;
-            case PUBACK:
-                onPubAck((MqttPubAckMessage) msg);
-                break;
-            case PINGREQ:
-                ack = onPingReq();
-                break;
-            case DISCONNECT:
-                onDisconnect();
-                break;
-            default:
-                throw new RuntimeException("UnSupported message type: " + msg.fixedHeader().messageType());
-        }
-        if (ack != null) {
-            this.channel.writeAndFlush(ack);
-        }
+        executor.execute(() -> {
+            try {
+                MqttMessageType type = msg.fixedHeader().messageType();
+                switch (type) {
+                    case CONNECT:
+                        onConnect((MqttConnectMessage) msg);
+                        break;
+                    case PUBLISH:
+                        onPublish((MqttPublishMessage) msg);
+                        break;
+                    case SUBSCRIBE:
+                        onSubscribe((MqttSubscribeMessage) msg);
+                        break;
+                    case UNSUBSCRIBE:
+                        onUnSubscribe((MqttUnsubscribeMessage) msg);
+                        break;
+                    case PUBACK:
+                        onPubAck((MqttPubAckMessage) msg);
+                        break;
+                    case PINGREQ:
+                        onPingReq();
+                        break;
+                    case DISCONNECT:
+                        onDisconnect();
+                        break;
+                    default:
+                        throw new RuntimeException("UnSupported message type: " + type);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                channel.close();
+            }
+        });
     }
 
-    private MqttConnAckMessage onConnect(MqttConnectMessage msg) throws Exception {
-        userid = msg.payload().userName();
+    private void onConnect(MqttConnectMessage msg) throws Exception {
+        userId = msg.payload().userName();
         String password = msg.payload().password();
-        state.enter(userid);
-        this.topics.addAll(subTable.get(userid));
+        state.enter(userId);
+        this.topics.addAll(subTable.get(userId));
         this.dispatcher.register(topics, this);
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.CONNACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttConnAckVariableHeader variable = new MqttConnAckVariableHeader(MqttConnectReturnCode.CONNECTION_ACCEPTED, false);
-        System.out.println(this.userid + " Connected");
-        return new MqttConnAckMessage(fixed, variable);
+        System.out.println(this.userId + " Connected");
+        MqttConnAckMessage ack = new MqttConnAckMessage(fixed, variable);
+        this.channel.writeAndFlush(ack);
+        this.sendOfflineMessages();
     }
 
     private void onDisconnect() {
-        System.out.println("Receive disconnect message from " + this.userid);
+        System.out.println("Receive disconnect message from " + this.userId);
         channel.close();
     }
 
-    private MqttSubAckMessage onSubscribe(MqttSubscribeMessage sub) throws Exception {
+    private void onSubscribe(MqttSubscribeMessage sub) throws Exception {
         List<MqttTopicSubscription> list = sub.payload().topicSubscriptions();
         List<Integer> qos = new ArrayList<>();
         List<String> topics = new ArrayList<>();
@@ -110,30 +118,30 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
             topics.add(s.topicName());
             qos.add(s.qualityOfService().value());
         }
-        subTable.sub(userid, topics);
+        subTable.sub(userId, topics);
         dispatcher.register(topics, this);
         this.topics.addAll(topics);
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.SUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttMessageIdVariableHeader variableHeader = MqttMessageIdVariableHeader.from(sub.variableHeader().messageId());
         MqttSubAckPayload payload = new MqttSubAckPayload(qos);
         MqttSubAckMessage ack = new MqttSubAckMessage(fixed, variableHeader, payload);
-        System.out.println(this.userid + " subscribed to " + topics);
-        return ack;
+        System.out.println(this.userId + " subscribed to " + topics);
+        this.channel.writeAndFlush(ack);
     }
 
-    private MqttUnsubAckMessage onUnSubscribe(MqttUnsubscribeMessage unSub) throws Exception {
+    private void onUnSubscribe(MqttUnsubscribeMessage unSub) throws Exception {
         List<String> topics = unSub.payload().topics();
         this.dispatcher.deregister(topics, this);
-        this.subTable.unSub(this.userid, topics);
+        this.subTable.unSub(this.userId, topics);
         this.topics.removeAll(topics);
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.UNSUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttMessageIdVariableHeader variableHeader = MqttMessageIdVariableHeader.from(unSub.variableHeader().messageId());
         MqttUnsubAckMessage ack = new MqttUnsubAckMessage(fixed, variableHeader);
-        System.out.println(this.userid + " unSubscribed to " + topics);
-        return ack;
+        System.out.println(this.userId + " unSubscribed to " + topics);
+        this.channel.writeAndFlush(ack);
     }
 
-    private MqttPubAckMessage onPublish(MqttPublishMessage publish) throws Exception {
+    private void onPublish(MqttPublishMessage publish) throws Exception {
         if (publish.fixedHeader().qosLevel() != MqttQoS.AT_LEAST_ONCE) {
             throw new RuntimeException("Unsupported Qos: " + publish.fixedHeader().qosLevel());
         }
@@ -145,22 +153,24 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
         MqttMessageIdVariableHeader variable = MqttMessageIdVariableHeader.from(publish.variableHeader().messageId());
-        return new MqttPubAckMessage(fixed, variable);
+        MqttPubAckMessage ack = new MqttPubAckMessage(fixed, variable);
+        this.channel.writeAndFlush(ack);
     }
 
     private void onPubAck(MqttPubAckMessage ack) throws Exception {
         int ackId = ack.variableHeader().messageId();
         ToAck next = this.toAcks.poll();
         if (next != null && ackId == next.msgid) {
-            this.subTable.updateLastAckId(this.userid, next.topic, ackId);
+            this.subTable.updateLastAckId(this.userId, next.topic, ackId);
         } else {
             throw new RuntimeException("Out of order. Expected: " + (next == null ? null : next.msgid) + ", but: " + ackId);
         }
     }
 
-    private MqttMessage onPingReq() throws Exception {
+    private void onPingReq() throws Exception {
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PINGRESP, false, MqttQoS.AT_MOST_ONCE, false, 0);
-        return new MqttMessage(fixed);
+        MqttMessage ack = new MqttMessage(fixed);
+        this.channel.writeAndFlush(ack);
     }
 
     private void sendOfflineMessages() {
@@ -199,16 +209,14 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private Map<String, Long> sendOfflineMessages0() throws Exception {
         // offline messages
-        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userid);
+        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userId);
         if (!metas.isEmpty()) {
             Map<String, Long> hasSent = new HashMap<>();
-            for (OfflineMessagesMeta meta : metas) {
+            metas.forEach((meta) -> {
                 List<Message> messages = msgTable.get(meta);
-                for (Message msg : messages) {
-                    directSend(msg);
-                }
+                messages.forEach(this::directSend);
                 hasSent.put(meta.topic, meta.end);
-            }
+            });
             return hasSent;
         } else {
             return null;
@@ -240,12 +248,12 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        if (this.userid != null) {
+        if (this.userId != null) {
             if (this.topics != null) {
                 this.dispatcher.deregister(this.topics, this);
             }
-            state.exit(userid);
-            System.out.println(this.userid + " disconnected");
+            state.exit(userId);
+            System.out.println(this.userId + " disconnected");
         }
     }
 

@@ -26,7 +26,6 @@ public class MqttServer {
         executor.execute(dispatcher);
 
         OnlineState state = new OnlineState();
-
         ServerBootstrap bootstrap = new ServerBootstrap();
         EventLoopGroup worker = new NioEventLoopGroup();
         try {
@@ -38,7 +37,7 @@ public class MqttServer {
                             ch.pipeline().addLast(new MqttDecoder());
                             ch.pipeline().addLast(MqttEncoder.INSTANCE);
                             ch.pipeline().addLast(new IdleStateHandler(resources.maxIdleTime, 0, 0));
-                            ch.pipeline().addLast(new MqttHandler(resources.postgres, dispatcher, resources.mongo, state));
+                            ch.pipeline().addLast(new MqttHandler(resources, dispatcher, state));
                         }
                     });
             ChannelFuture future = bootstrap.bind(resources.port).sync();
