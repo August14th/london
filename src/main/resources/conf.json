@@ -3,20 +3,19 @@
   "maxIdleTime": 60,
   "postgres": {
     "c3p0": {
-      "jdbcUrl": "jdbc:postgresql://39.108.212.110:7070/pipeline",
+      "jdbcUrl": "jdbc:postgresql://127.0.0.1:5432/london",
       "driverClass": "org.postgresql.Driver",
-      "user": "pdb",
-      "password": "postgres",
+      "user": "london",
+      "password": "london",
       "maxPoolSize": 30,
       "minPoolSize": 1,
       "maxIdleTime": 60
     }
   },
   "mongo": {
-    "ip": "39.108.212.110",
+    "ip": "127.0.0.1",
     "port": 27017,
-    "username": "bi",
-    "password": "bi"
-  },
-  "threadSize": 16
+    "username": "london",
+    "password": "london"
+  }
 }

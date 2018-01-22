@@ -1,4 +1,4 @@
-package org.hello.london.db;
+package org.hello.london.store;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.hello.london.core.Message;
@@ -9,46 +9,39 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
-public class Topics {
+public class TopicStore {
 
     private DataSource postgres;
 
-    private Messages msgTable;
+    private MessageStore msgTable;
 
-    public Topics(DataSource postgres, Messages msgTable) {
+    public TopicStore(DataSource postgres, MessageStore msgTable) {
         this.postgres = postgres;
         this.msgTable = msgTable;
     }
 
     public Message publish(String topic, byte[] payload) throws Exception {
         Connection conn = postgres.getConnection();
-        long lastMsgId = -1;
-        conn.setAutoCommit(false);
         try {
-            // increase last message's id
-            PreparedStatement update = conn.prepareStatement("UPDATE topics SET lastmsgid = lastmsgid + 1 WHERE id = ? RETURNING lastmsgid");
-            try {
+            long lastMsgId = -1;
+            conn.setAutoCommit(false);
+            try (PreparedStatement update = conn.prepareStatement("UPDATE topics SET lastmsgid = lastmsgid + 1 WHERE id = ? RETURNING lastmsgid")) {
+                // increase last message's id
                 update.setString(1, topic);
-                ResultSet rs = update.executeQuery();
-                if (rs.next()) {
-                    lastMsgId = rs.getLong(1);
+                try (ResultSet rs = update.executeQuery()) {
+                    if (rs.next()) {
+                        lastMsgId = rs.getLong(1);
+                    }
                 }
-                rs.close();
-            } finally {
-                update.close();
             }
             if (lastMsgId == -1) {
                 // create topic
-                PreparedStatement insert = conn.prepareStatement("INSERT INTO topics(id, lastmsgid) VALUES (?, ?)");
-                try {
+                try (PreparedStatement insert = conn.prepareStatement("INSERT INTO topics(id, lastmsgid) VALUES (?, 1)")) {
                     insert.setString(1, topic);
-                    insert.setLong(2, 1);
                     boolean ok = insert.executeUpdate() == 1;
                     if (!ok) {
                         throw new SQLException("Create topic failed.");
                     }
-                } finally {
-                    insert.close();
                 }
                 lastMsgId = 1;
             }
@@ -59,17 +52,14 @@ public class Topics {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-            // notify through postgres' channel
-            PreparedStatement notify = conn.prepareStatement("SELECT pg_notify(?, ?)");
-            try {
+            // notify through postgres' channel        ;
+            try (PreparedStatement notify = conn.prepareStatement("SELECT pg_notify(?, ?)")) {
                 notify.setString(1, "london");
                 ObjectMapper mapper = new ObjectMapper();
                 notify.setString(2, mapper.writeValueAsString(msg));
                 notify.executeQuery().close();
                 conn.commit();
                 return msg;
-            } finally {
-                notify.close();
             }
         } catch (Exception e) {
             conn.rollback();

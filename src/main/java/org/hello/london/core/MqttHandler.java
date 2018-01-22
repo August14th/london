@@ -7,11 +7,11 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.handler.timeout.IdleStateEvent;
-import org.hello.london.db.Messages;
-import org.hello.london.db.OfflineMessagesMeta;
-import org.hello.london.db.Subscribes;
-import org.hello.london.db.Topics;
 import org.hello.london.resource.Resources;
+import org.hello.london.store.MessageStore;
+import org.hello.london.store.MessagesRange;
+import org.hello.london.store.SubscribeStore;
+import org.hello.london.store.TopicStore;
 
 import java.util.*;
 import java.util.concurrent.ExecutorService;
@@ -28,11 +28,11 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private List<String> topics = new ArrayList<>();
 
-    private Topics topicTable;
+    private TopicStore topicTable;
 
-    private Subscribes subTable;
+    private SubscribeStore subTable;
 
-    private Messages msgTable;
+    private MessageStore msgTable;
 
     private Dispatcher dispatcher;
 
@@ -45,9 +45,9 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     public MqttHandler(Resources resources, Dispatcher dispatcher, OnlineState state) {
         this.dispatcher = dispatcher;
         this.state = state;
-        msgTable = new Messages(resources.mongo);
-        topicTable = new Topics(resources.postgres, msgTable);
-        subTable = new Subscribes(resources.postgres);
+        msgTable = new MessageStore(resources.mongo);
+        topicTable = new TopicStore(resources.postgres, msgTable);
+        subTable = new SubscribeStore(resources.postgres);
     }
 
     @Override
@@ -56,7 +56,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     protected void channelRead0(ChannelHandlerContext ctx, MqttMessage msg) throws Exception {
-        executor.execute(() -> {
+         executor.execute(() -> {
             try {
                 MqttMessageType type = msg.fixedHeader().messageType();
                 switch (type) {
@@ -88,7 +88,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
                 e.printStackTrace();
                 channel.close();
             }
-        });
+         });
     }
 
     private void onConnect(MqttConnectMessage msg) throws Exception {
@@ -149,6 +149,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
         ByteBuf byteBuf = publish.payload();
         byte[] payload = new byte[byteBuf.readableBytes()];
         byteBuf.getBytes(byteBuf.readerIndex(), payload, 0, byteBuf.readableBytes());
+
         topicTable.publish(topic, payload);
 
         MqttFixedHeader fixed = new MqttFixedHeader(MqttMessageType.PUBACK, false, MqttQoS.AT_MOST_ONCE, false, 2);
@@ -209,13 +210,13 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private Map<String, Long> sendOfflineMessages0() throws Exception {
         // offline messages
-        List<OfflineMessagesMeta> metas = subTable.getOfflineMessageMetas(userId);
-        if (!metas.isEmpty()) {
+        List<MessagesRange> ranges = subTable.getOfflineMessageRanges(userId);
+        if (!ranges.isEmpty()) {
             Map<String, Long> hasSent = new HashMap<>();
-            metas.forEach((meta) -> {
-                List<Message> messages = msgTable.get(meta);
+            ranges.forEach((range) -> {
+                List<Message> messages = msgTable.get(range);
                 messages.forEach(this::directSend);
-                hasSent.put(meta.topic, meta.end);
+                hasSent.put(range.topic, range.end);
             });
             return hasSent;
         } else {

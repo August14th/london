@@ -1,8 +1,8 @@
-package org.hello.london.db;
+package org.hello.london.store;
 
-public class OfflineMessagesMeta {
+public class MessagesRange {
 
-    public OfflineMessagesMeta(String topic, long start, long end) {
+    public MessagesRange(String topic, long start, long end) {
         this.topic = topic;
         this.start = start;
         this.end = end;

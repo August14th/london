@@ -3,11 +3,14 @@ package org.hello.london.resource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mchange.v2.c3p0.ComboPooledDataSource;
 import com.mongodb.MongoClient;
+import com.mongodb.MongoCredential;
+import com.mongodb.ServerAddress;
 
 import javax.sql.DataSource;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Arrays;
 
 public class Resources implements Closeable {
 
@@ -42,7 +45,9 @@ public class Resources implements Closeable {
     }
 
     private MongoClient getMongoClient(Mongo mongo) {
-        MongoClient client = new MongoClient(mongo.ip, mongo.port);
+        MongoCredential credential = MongoCredential.createCredential(mongo.username, "london", mongo.password.toCharArray());
+        ServerAddress address = new ServerAddress(mongo.ip, mongo.port);
+        MongoClient client = new MongoClient(address, Arrays.asList(credential));
         return client;
     }
 
