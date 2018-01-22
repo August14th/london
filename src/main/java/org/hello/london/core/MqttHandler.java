@@ -7,6 +7,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.mqtt.*;
 import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.util.ReferenceCountUtil;
 import org.hello.london.resource.Resources;
 import org.hello.london.store.MessageStore;
 import org.hello.london.store.MessagesRange;
@@ -56,6 +57,7 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     protected void channelRead0(ChannelHandlerContext ctx, MqttMessage msg) throws Exception {
+        ReferenceCountUtil.retain(msg);
          executor.execute(() -> {
             try {
                 MqttMessageType type = msg.fixedHeader().messageType();
@@ -87,6 +89,8 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
             } catch (Exception e) {
                 e.printStackTrace();
                 channel.close();
+            }finally {
+                ReferenceCountUtil.release(msg);
             }
          });
     }
