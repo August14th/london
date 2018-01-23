@@ -18,6 +18,7 @@ import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
@@ -43,6 +44,9 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
 
     private LinkedBlockingQueue<Message> buffer = new LinkedBlockingQueue<>();
 
+    // 同时只能处理一个请求
+    private AtomicBoolean processing = new AtomicBoolean(false);
+
     public MqttHandler(Resources resources, Dispatcher dispatcher, OnlineState state) {
         this.dispatcher = dispatcher;
         this.state = state;
@@ -57,8 +61,11 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
     }
 
     protected void channelRead0(ChannelHandlerContext ctx, MqttMessage msg) throws Exception {
+        if (!processing.compareAndSet(false, true)) {
+            throw new RuntimeException("too frequent");
+        }
         ReferenceCountUtil.retain(msg);
-         executor.execute(() -> {
+        executor.execute(() -> {
             try {
                 MqttMessageType type = msg.fixedHeader().messageType();
                 switch (type) {
@@ -89,10 +96,11 @@ public class MqttHandler extends SimpleChannelInboundHandler<MqttMessage> {
             } catch (Exception e) {
                 e.printStackTrace();
                 channel.close();
-            }finally {
+            } finally {
                 ReferenceCountUtil.release(msg);
+                processing.set(false);
             }
-         });
+        });
     }
 
     private void onConnect(MqttConnectMessage msg) throws Exception {
